@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Elegí tu turno</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{background:#0a0a0c;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;max-width:480px;margin:auto;padding:18px 14px 110px}
+a.back{color:#ffd400;text-decoration:none;font-size:15px;font-weight:700}
+h1{font-size:28px;font-weight:900;font-style:italic;margin:12px 0 4px}
+.res{background:#16161a;border-radius:14px;padding:12px 14px;margin:10px 0 16px;font-size:14px;line-height:1.5}
+.res b{color:#ffd400}
+.cal{background:#16161a;border-radius:16px;padding:12px}
+.mes{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:800;font-size:17px;text-transform:capitalize}
+.mes button{width:42px;height:42px;border:0;border-radius:12px;background:#2a2a30;color:#fff;font-size:20px}
+.mes button:disabled{opacity:.3}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;text-align:center}
+.grid .h{font-size:12px;color:#888;padding:4px 0}
+.grid button{aspect-ratio:1;border:0;border-radius:10px;background:#22222a;color:#fff;font-size:15px;font-weight:600}
+.grid button:disabled{background:none;color:#444}
+.grid button.on{background:#ffd400;color:#111;font-weight:900}
+h2{font-size:18px;margin:18px 0 10px}
+.horas{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.horas button{padding:14px 6px;border:2px solid #2a2a30;border-radius:12px;background:#16161a;color:#fff;font-size:16px;font-weight:700}
+.horas button.on{background:#ffd400;color:#111;border-color:#ffd400}
+.horas button:disabled{opacity:.35;text-decoration:line-through}
+.vacio{color:#aaa;font-size:14px}
+.nota{color:#ffd400;font-size:13px;margin-top:8px}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:#0a0a0cee;max-width:480px;margin:auto}
+.bar button{width:100%;padding:18px;border:0;border-radius:14px;background:#25d366;color:#05230f;font-size:18px;font-weight:900}
+.bar button:disabled{background:#2a2a30;color:#777}
+</style>
+</head>
+<body>
+<a class="back" href="servicios.html">← Cambiar servicio</a>
+<h1>Elegí día y hora</h1>
+<div class="res" id="res"></div>
+
+<div class="cal">
+  <div class="mes"><button id="prev">‹</button><span id="titulo"></span><button id="next">›</button></div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<h2 id="hTit" hidden>Horarios disponibles</h2>
+<div class="horas" id="horas"></div>
+<div class="nota" id="nota" hidden>Este servicio se retira al día siguiente (tiene que secarse).</div>
+
+<div class="bar"><button id="enviar" disabled>Solicitar servicio</button></div>
+
+<script>
+window.addEventListener('error', e => { const d = document.createElement('div'); d.style.cssText = 'background:#900;color:#fff;padding:10px;font-size:13px;margin:8px 0'; d.textContent = 'Error: ' + e.message; document.body.prepend(d); });
+const S = {
+  g(k) { try { const v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {} try { const o = JSON.parse(window.name || '{}'); return o[k] === undefined ? null : o[k]; } catch (e) { return null; } },
+  s(k, v) { try { localStorage.setItem(k, v); } catch (e) {} try { let o; try { o = JSON.parse(window.name || '{}'); } catch (e) { o = {}; } o[k] = v; window.name = JSON.stringify(o); } catch (e) {} },
+  r(k) { try { localStorage.removeItem(k); } catch (e) {} try { const o = JSON.parse(window.name || '{}'); delete o[k]; window.name = JSON.stringify(o); } catch (e) {} }
+};
+const DB_URL = ''; // ← Pegá acá la URL de tu Firebase Realtime Database (sin barra final). Ej: https://mi-lavadero-default-rtdb.firebaseio.com
+const WHATSAPP = '5492317000000'; // ← Cambiá por el número de tu lavadero: 549 + código de área + número, sin 0 ni 15
+const P = new URLSearchParams(location.search);
+const c = JSON.parse(S.g('cw_cliente') || P.get('c') || 'null');
+const s = JSON.parse(S.g('cw_servicio') || P.get('s') || 'null');
+if (!c) location.replace('index.html'); else if (!s) location.replace('servicios.html?c=' + encodeURIComponent(JSON.stringify(c)));
+if (c) document.querySelector('.back').href = 'servicios.html?c=' + encodeURIComponent(JSON.stringify(c));
+
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, '0');
+const fmt = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+const horasDia = d => (d.getDay() === 0 || d.getDay() === 6) ? [13, 14, 15, 16] : [8, 9, 10, 11, 16, 17, 18, 19];
+const turnos = () => { try { return JSON.parse(S.g('cw_turnos') || '[]'); } catch (e) { return []; } };
+let ocupados = new Set(turnos());
+const ocupado = (d, h) => ocupados.has(fmt(d) + ' ' + h);
+async function cargar() {
+  ocupados = new Set(turnos());
+  if (DB_URL) { try { const r = await fetch(DB_URL + '/turnos.json'); const d = await r.json(); Object.keys(d || {}).forEach(k => ocupados.add(k.replace('_', ' '))); } catch (e) {} }
+  horario();
+}
+
+const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+let vista = new Date(hoy.getFullYear(), hoy.getMonth(), 1), dia = null, hora = null;
+
+$('res').innerHTML = '<b>' + c.nombre + '</b> · ' + (c.tipo === 'moto' ? '🏍️ ' : '🚗 ') + c.modelo + '<br>' + s.nombre + ' · <b>$' + s.precio.toLocaleString('es-AR') + '</b>';
+if (s.nota) $('nota').hidden = false;
+
+function calendario() {
+  $('titulo').textContent = vista.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
+  $('prev').disabled = vista <= new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  const g = $('grid'); g.innerHTML = '';
+  ['L', 'M', 'M', 'J', 'V', 'S', 'D'].forEach(x => g.insertAdjacentHTML('beforeend', '<div class="h">' + x + '</div>'));
+  const desfase = (vista.getDay() + 6) % 7;
+  for (let i = 0; i < desfase; i++) g.appendChild(document.createElement('span'));
+  const total = new Date(vista.getFullYear(), vista.getMonth() + 1, 0).getDate();
+  for (let n = 1; n <= total; n++) {
+    const d = new Date(vista.getFullYear(), vista.getMonth(), n);
+    const b = document.createElement('button');
+    b.textContent = n;
+    b.disabled = d < hoy;
+    if (dia && fmt(dia) === fmt(d)) b.className = 'on';
+    b.onclick = () => { dia = d; hora = null; calendario(); horario(); };
+    g.appendChild(b);
+  }
+}
+
+function horario() {
+  const box = $('horas'); box.innerHTML = '';
+  $('hTit').hidden = !dia;
+  $('enviar').disabled = hora === null;
+  if (!dia) return;
+  const ahora = new Date();
+  const esHoy = fmt(dia) === fmt(ahora);
+  const libres = horasDia(dia).filter(h => !(esHoy && h <= ahora.getHours()));
+  if (!libres.length) { box.innerHTML = '<div class="vacio">No quedan horarios para hoy. Elegí otro día.</div>'; return; }
+  libres.forEach(h => {
+    const b = document.createElement('button');
+    b.textContent = h + ':00 a ' + (h + 1) + ':00';
+    b.disabled = ocupado(dia, h);
+    if (hora === h) b.className = 'on';
+    b.onclick = () => { hora = h; horario(); };
+    box.appendChild(b);
+  });
+}
+
+$('prev').onclick = () => { vista = new Date(vista.getFullYear(), vista.getMonth() - 1, 1); calendario(); };
+$('next').onclick = () => { vista = new Date(vista.getFullYear(), vista.getMonth() + 1, 1); calendario(); };
+
+$('enviar').onclick = async () => {
+  if (!dia || hora === null) return;
+  const btn = $('enviar'); btn.disabled = true; btn.textContent = 'Reservando…';
+  const reset = () => { btn.textContent = 'Solicitar servicio'; hora = null; horario(); };
+  await cargar();
+  if (ocupado(dia, hora)) { alert('Ese horario ya fue reservado. Elegí otro.'); reset(); return; }
+  if (DB_URL) {
+    try { const r = await fetch(DB_URL + '/turnos/' + fmt(dia) + '_' + hora + '.json', { method: 'PUT', body: 'true' }); if (!r.ok) throw 0; }
+    catch (e) { alert('No se pudo reservar. Puede que alguien tomó ese horario recién o falló la conexión. Elegí otro horario.'); await cargar(); reset(); return; }
+  }
+  const t = turnos(); t.push(fmt(dia) + ' ' + hora);
+  S.s('cw_turnos', JSON.stringify(t));
+  const fecha = dia.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const msg = '¡Hola! Quiero solicitar un turno:\n' +
+    '👤 Nombre: ' + c.nombre + '\n' +
+    (c.tipo === 'moto' ? '🏍️ Vehículo: Moto ' : '🚗 Vehículo: Auto ') + c.modelo + '\n' +
+    '🧼 Servicio: ' + s.nombre + ' ($' + s.precio.toLocaleString('es-AR') + ')\n' +
+    '📅 Fecha: ' + fecha + '\n' +
+    '🕐 Horario: ' + hora + ':00 a ' + (hora + 1) + ':00' +
+    (s.nota ? '\nℹ️ Retiro: al día siguiente' : '');
+  S.r('cw_servicio');
+  S.s('cw_ok', '1');
+  const url = 'https://wa.me/' + WHATSAPP + '?text=' + encodeURIComponent(msg);
+  const w = window.open(url, '_blank');
+  if (w) location.href = 'index.html'; else location.href = url;
+};
+
+// Si el cliente vuelve desde WhatsApp después de enviar, lo llevamos al inicio
+const volver = () => { if (S.g('cw_ok')) { S.r('cw_ok'); location.replace('index.html'); } };
+addEventListener('pageshow', volver);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) volver(); });
+
+calendario();
+cargar();
+</script>
+</body>
+</html>
